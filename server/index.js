@@ -136,7 +136,7 @@ io.on('connection', (socket) => {
 });
 
 // Catch-all: serve React app for any non-API route
-app.get('*', (req, res) => {
+app.use((req, res) => {
   res.sendFile(join(clientDist, 'index.html'));
 });
 
