@@ -31,6 +31,10 @@
 body {
   margin: 0;
   min-height: 100svh;
+  background-color: #111111;
+  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='41.57' height='72'><polygon points='0,-24 20.78,-12 20.78,12 0,24 -20.78,12 -20.78,-12' fill='%230d0d0d' stroke='%23e07800' stroke-width='1' stroke-opacity='0.3'/><polygon points='41.57,-24 62.35,-12 62.35,12 41.57,24 20.79,12 20.79,-12' fill='%230d0d0d' stroke='%23e07800' stroke-width='1' stroke-opacity='0.3'/><polygon points='20.785,12 41.565,24 41.565,48 20.785,60 0.005,48 0.005,24' fill='%230d0d0d' stroke='%23e07800' stroke-width='1' stroke-opacity='0.3'/><polygon points='0,48 20.78,60 20.78,84 0,96 -20.78,84 -20.78,60' fill='%230d0d0d' stroke='%23e07800' stroke-width='1' stroke-opacity='0.3'/><polygon points='41.57,48 62.35,60 62.35,84 41.57,96 20.79,84 20.79,60' fill='%230d0d0d' stroke='%23e07800' stroke-width='1' stroke-opacity='0.3'/></svg>");
+  background-size: 41.57px 72px;
+  background-attachment: fixed;
 }
 
 #root {
