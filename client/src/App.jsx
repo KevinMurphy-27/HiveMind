@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
+import { createClient } from '@supabase/supabase-js';
 import { jsPDF } from 'jspdf';
 import './App.css';
 
 // In dev, VITE_SERVER_URL points to localhost:3001.
 // In production the frontend is served by the same Express server,
 // so an empty string (same origin) works for both fetch and Socket.IO.
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || '';
+const SERVER_URL     = import.meta.env.VITE_SERVER_URL || '';
+const SUPABASE_URL   = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON  = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // ─── Home View ────────────────────────────────────────────────────────────────
 const SESSION_TYPES = [
@@ -145,7 +148,7 @@ function HomeView({ onCreateRoom, onJoinRoom }) {
 
 // ─── Note Card ────────────────────────────────────────────────────────────────
 function NoteCard({ note }) {
-  const time = new Date(note.timestamp).toLocaleTimeString([], {
+  const time = new Date(note.created_at).toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
   });
@@ -153,7 +156,7 @@ function NoteCard({ note }) {
   return (
     <div className="note-card">
       <div className="note-meta">
-        <span className="note-author">{note.userName}</span>
+        <span className="note-author">{note.user_name}</span>
         <span className="note-time">{time}</span>
       </div>
       <p className="note-content">{note.content}</p>
@@ -171,6 +174,7 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
   const [connected, setConnected] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
   const [sessionType, setSessionType] = useState(sessionTypeProp ?? 'meeting');
+  const [clusters, setClusters] = useState([]);
 
   const [imageAttachment, setImageAttachment] = useState(null);
   const [imageError, setImageError] = useState('');
@@ -185,6 +189,7 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [notes]);
 
+  // ── Socket.IO — session control, errors, summary ──────────────────────────
   useEffect(() => {
     const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
@@ -192,11 +197,6 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
     socket.on('connect', () => {
       setConnected(true);
       socket.emit('join-room', { roomCode, userName, isHost });
-    });
-
-    socket.on('notes-update', (updatedNotes) => {
-      setNotes(updatedNotes);
-      setSubmitting(false);
     });
 
     socket.on('session-type', (type) => {
@@ -222,6 +222,59 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
       socket.disconnect();
     };
   }, [roomCode, userName, isHost]);
+
+  // ── Supabase Realtime — ideas ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_ANON) return;
+    const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+    // Load existing ideas
+    sb.from('ideas')
+      .select('*')
+      .eq('session_code', roomCode)
+      .order('created_at')
+      .then(({ data }) => { if (data) setNotes(data); });
+
+    // Subscribe to new inserts
+    const ch = sb
+      .channel(`ideas:${roomCode}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'ideas', filter: `session_code=eq.${roomCode}` },
+        (payload) => {
+          setNotes((prev) => [...prev, payload.new]);
+          if (payload.new.user_name === userName) setSubmitting(false);
+        },
+      )
+      .subscribe();
+
+    return () => { sb.removeChannel(ch); };
+  }, [roomCode, userName]);
+
+  // ── Supabase Realtime — clusters (brainstorm only) ────────────────────────
+  useEffect(() => {
+    if (sessionType !== 'brainstorm' || !SUPABASE_URL || !SUPABASE_ANON) return;
+    const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+    // Load existing clusters
+    sb.from('clusters')
+      .select('data')
+      .eq('session_code', roomCode)
+      .single()
+      .then(({ data }) => { if (data?.data) setClusters(data.data); });
+
+    // Subscribe to cluster upserts
+    const ch = sb
+      .channel(`clusters:${roomCode}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'clusters', filter: `session_code=eq.${roomCode}` },
+        (payload) => { if (payload.new?.data) setClusters(payload.new.data); },
+      )
+      .subscribe();
+
+    return () => { sb.removeChannel(ch); };
+  }, [sessionType, roomCode]);
 
   const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
   const MAX_SIZE = 5 * 1024 * 1024;
@@ -478,6 +531,31 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
               <button className="export-btn" onClick={exportPDF}>
                 ↓ Export as PDF
               </button>
+            </div>
+          )}
+
+          {/* ── Live Clusters (brainstorm only) ── */}
+          {sessionType === 'brainstorm' && clusters.length > 0 && (
+            <div className="cluster-section">
+              <div className="cluster-section-header">
+                <span className="cluster-icon">◈</span>
+                <h3 className="cluster-title">Live Clusters</h3>
+                <span className="cluster-subtitle">auto-updates every minute</span>
+              </div>
+              <div className="cluster-grid">
+                {clusters.map((c, i) => (
+                  <div
+                    key={c.label}
+                    className="cluster-card"
+                    style={{ animationDelay: `${i * 0.05}s` }}
+                  >
+                    <div className="cluster-label">{c.label}</div>
+                    <ul className="cluster-ideas">
+                      {c.ideas.map((idea, j) => <li key={j}>{idea}</li>)}
+                    </ul>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </aside>

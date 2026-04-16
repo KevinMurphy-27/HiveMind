@@ -615,6 +615,58 @@
   background: #e6c200;
 }
 
+/* ── Cluster cards ── */
+.cluster-section { margin-top: 20px; }
+.cluster-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.cluster-icon { color: var(--accent); font-size: 14px; }
+.cluster-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.cluster-subtitle { font-size: 11px; color: var(--text-faint); margin-left: auto; }
+.cluster-grid { display: flex; flex-direction: column; gap: 8px; }
+.cluster-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  animation: clusterIn 0.35s ease both;
+}
+@keyframes clusterIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+.cluster-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.cluster-ideas {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cluster-ideas li {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-left: 12px;
+  position: relative;
+}
+.cluster-ideas li::before {
+  content: '·';
+  position: absolute;
+  left: 3px;
+  color: var(--accent);
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .room-body { flex-direction: column; }
