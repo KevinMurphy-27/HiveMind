@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
+import { jsPDF } from 'jspdf';
 import './App.css';
 
 // In dev, VITE_SERVER_URL points to localhost:3001.
@@ -290,6 +291,35 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
     });
   }
 
+  function exportPDF() {
+    if (!summary) return;
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 40;
+    const maxWidth = pageWidth - margin * 2;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text('HiveMind — AI Summary', margin, 50);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(120);
+    const sessionLabel = SESSION_LABELS[sessionType]?.label ?? sessionType;
+    doc.text(
+      `Session: ${sessionLabel}   |   Room: ${roomCode}   |   ${new Date().toLocaleString()}`,
+      margin,
+      68,
+    );
+
+    doc.setTextColor(30);
+    doc.setFontSize(11);
+    const lines = doc.splitTextToSize(summary, maxWidth);
+    doc.text(lines, margin, 92);
+
+    doc.save(`hivemind-summary-${roomCode}.pdf`);
+  }
+
   return (
     <div className="room-view">
       <header className="room-header">
@@ -445,6 +475,9 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
                 <h3 className="summary-title">AI Summary</h3>
               </div>
               <p className="summary-body">{summary}</p>
+              <button className="export-btn" onClick={exportPDF}>
+                ↓ Export as PDF
+              </button>
             </div>
           )}
         </aside>
