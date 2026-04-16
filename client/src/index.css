@@ -1,0 +1,65 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #111111;
+  --surface: #1c1c1c;
+  --surface2: #242424;
+  --border: #2e2e2e;
+  --accent: #FFD600;
+  --accent-dark: #e6c200;
+  --accent-dim: rgba(255, 214, 0, 0.12);
+  --text: #f0f0f0;
+  --text-muted: #888888;
+  --text-faint: #555555;
+  --danger: #ff5f5f;
+  --green: #4caf78;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+}
+
+#root {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+p {
+  margin: 0;
+}
+
+button {
+  cursor: pointer;
+  font-family: var(--sans);
+}
+
+input, textarea {
+  font-family: var(--sans);
+}
+
+/* scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
