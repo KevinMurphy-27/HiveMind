@@ -313,7 +313,12 @@ function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
   const handleAddNote = useCallback(() => {
     const content = noteText.trim();
     if ((!content && !imageAttachment) || !socketRef.current) return;
-    setSubmitting(true);
+
+    // Only block the button for image notes — server-side extraction takes time.
+    // Text-only notes are fire-and-forget; Supabase Realtime delivers them to the feed.
+    const hasImage = !!imageAttachment;
+    if (hasImage) setSubmitting(true);
+
     socketRef.current.emit('add-note', {
       roomCode,
       userName,
