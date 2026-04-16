@@ -2,6 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import './App.css';
 
+// In dev, VITE_SERVER_URL points to localhost:3001.
+// In production the frontend is served by the same Express server,
+// so an empty string (same origin) works for both fetch and Socket.IO.
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || '';
+
 // ─── Home View ────────────────────────────────────────────────────────────────
 function HomeView({ onCreateRoom, onJoinRoom }) {
   const [name, setName] = useState('');
@@ -23,7 +28,7 @@ function HomeView({ onCreateRoom, onJoinRoom }) {
     if (!validateName()) return;
     setCreating(true);
     try {
-      const res = await fetch(`${import.meta.env.VITE_SERVER_URL}/create-room`, { method: 'POST' });
+      const res = await fetch(`${SERVER_URL}/create-room`, { method: 'POST' });
       const { code } = await res.json();
       onCreateRoom(name.trim(), code);
     } catch {
@@ -144,7 +149,7 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
   }, [notes]);
 
   useEffect(() => {
-    const socket = io(import.meta.env.VITE_SERVER_URL, { transports: ['websocket', 'polling'] });
+    const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
     socket.on('connect', () => {
