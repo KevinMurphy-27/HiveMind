@@ -8,12 +8,25 @@ import './App.css';
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || '';
 
 // ─── Home View ────────────────────────────────────────────────────────────────
+const SESSION_TYPES = [
+  { value: 'lecture',    icon: '🎓', label: 'College Lecture' },
+  { value: 'meeting',    icon: '💼', label: 'Work Meeting' },
+  { value: 'brainstorm', icon: '💡', label: 'Brainstorming' },
+];
+
+const SESSION_LABELS = {
+  lecture:    { icon: '🎓', label: 'College Lecture' },
+  meeting:    { icon: '💼', label: 'Work Meeting' },
+  brainstorm: { icon: '💡', label: 'Brainstorming' },
+};
+
 function HomeView({ onCreateRoom, onJoinRoom }) {
   const [name, setName] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [nameError, setNameError] = useState('');
   const [joinError, setJoinError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [sessionType, setSessionType] = useState('meeting');
 
   function validateName() {
     if (!name.trim()) {
@@ -28,9 +41,13 @@ function HomeView({ onCreateRoom, onJoinRoom }) {
     if (!validateName()) return;
     setCreating(true);
     try {
-      const res = await fetch(`${SERVER_URL}/create-room`, { method: 'POST' });
-      const { code } = await res.json();
-      onCreateRoom(name.trim(), code);
+      const res = await fetch(`${SERVER_URL}/create-room`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionType }),
+      });
+      const { code, sessionType: confirmedType } = await res.json();
+      onCreateRoom(name.trim(), code, confirmedType);
     } catch {
       setNameError('Could not connect to server. Is it running?');
     } finally {
@@ -75,7 +92,20 @@ function HomeView({ onCreateRoom, onJoinRoom }) {
         <div className="home-actions">
           <div className="action-block">
             <h2 className="action-title">Start a session</h2>
-            <p className="action-desc">Create a room and share the code with your team.</p>
+            <p className="action-desc">Choose a session type, then share the room code.</p>
+            <div className="session-type-picker">
+              {SESSION_TYPES.map(({ value, icon, label }) => (
+                <button
+                  key={value}
+                  className={`session-type-card${sessionType === value ? ' active' : ''}`}
+                  onClick={() => setSessionType(value)}
+                  type="button"
+                >
+                  <span className="session-type-card-icon">{icon}</span>
+                  {label}
+                </button>
+              ))}
+            </div>
             <button
               className="btn btn-primary"
               onClick={handleCreate}
@@ -131,7 +161,7 @@ function NoteCard({ note }) {
 }
 
 // ─── Room View ────────────────────────────────────────────────────────────────
-function RoomView({ roomCode, userName, isHost, onLeave }) {
+function RoomView({ roomCode, userName, isHost, sessionTypeProp, onLeave }) {
   const [notes, setNotes] = useState([]);
   const [noteText, setNoteText] = useState('');
   const [summary, setSummary] = useState(null);
@@ -139,6 +169,7 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
   const [socketError, setSocketError] = useState('');
   const [connected, setConnected] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
+  const [sessionType, setSessionType] = useState(sessionTypeProp ?? 'meeting');
 
   const [imageAttachment, setImageAttachment] = useState(null);
   const [imageError, setImageError] = useState('');
@@ -165,6 +196,10 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
     socket.on('notes-update', (updatedNotes) => {
       setNotes(updatedNotes);
       setSubmitting(false);
+    });
+
+    socket.on('session-type', (type) => {
+      setSessionType(type);
     });
 
     socket.on('summary-ready', (text) => {
@@ -267,6 +302,11 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
             className={`status-dot ${connected ? 'online' : 'offline'}`}
             title={connected ? 'Connected' : 'Disconnected'}
           />
+          {sessionType && SESSION_LABELS[sessionType] && (
+            <span className="session-type-badge">
+              {SESSION_LABELS[sessionType].icon} {SESSION_LABELS[sessionType].label}
+            </span>
+          )}
         </div>
 
         <div className="room-code-block">
@@ -359,7 +399,7 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
             <div className="summarise-block">
               <h3 className="sidebar-title">AI Summary</h3>
               <p className="sidebar-desc">
-                Use Claude to summarise all notes in this room. Everyone will see the result.
+                Summarise as a <strong>{SESSION_LABELS[sessionType]?.label ?? 'session'}</strong>. Everyone will see the result.
               </p>
               <button
                 className="btn btn-accent summarise-btn"
@@ -419,10 +459,12 @@ export default function App() {
   const [roomCode, setRoomCode] = useState('');
   const [userName, setUserName] = useState('');
   const [isHost, setIsHost] = useState(false);
+  const [sessionType, setSessionType] = useState('meeting');
 
-  function handleCreateRoom(name, code) {
+  function handleCreateRoom(name, code, type) {
     setUserName(name);
     setRoomCode(code);
+    setSessionType(type ?? 'meeting');
     setIsHost(true);
     setView('room');
   }
@@ -439,6 +481,7 @@ export default function App() {
     setRoomCode('');
     setUserName('');
     setIsHost(false);
+    setSessionType('meeting');
   }
 
   if (view === 'room') {
@@ -447,6 +490,7 @@ export default function App() {
         roomCode={roomCode}
         userName={userName}
         isHost={isHost}
+        sessionTypeProp={sessionType}
         onLeave={handleLeave}
       />
     );

@@ -40,6 +40,14 @@ app.use(express.static(clientDist));
 // rooms[code] = { hostId: string|null, notes: Array<{ id, userName, content, timestamp }> }
 const rooms = {};
 
+const SESSION_PROMPTS = {
+  lecture: `You are summarising collaborative notes from a college lecture. Multiple students have submitted their notes, which may include text and images of slides or whiteboards. Combine everything into one structured set of lecture notes with clear headings and bullet points. Then produce four additional sections: Key Terms — a glossary of any important concepts or definitions mentioned. Likely Exam Points — flag anything that sounds like it could appear in an exam question. Gaps and Confusion — identify any topics where students seemed unsure or notes were thin, so the lecturer knows what needs revisiting. Suggested Reading — if specific topics came up, suggest what a student should look into further. Write in a clear academic tone.`,
+
+  meeting: `You are summarising collaborative notes from a work meeting. Multiple attendees have submitted their notes, which may include text and screenshots of screens or documents. Combine everything and produce the following sections: Summary — two to three sentences on what the meeting was about and what was decided. Action Items — a numbered list of tasks that need to happen, including who is responsible if any names were mentioned. Open Questions — anything that came up but was not resolved. Decisions Made — a clear list of things that were agreed on. Be concise and professional. Avoid padding. This summary may be sent directly to people who missed the meeting.`,
+
+  brainstorm: `You are summarising ideas from a group brainstorming session. Multiple participants have submitted their ideas, which may include text and images of sketches or diagrams. Do not filter or judge any ideas. Group them into themes and give each theme a short label. Within each theme, list every idea submitted. After the grouped ideas, add two sections: Strongest Directions — pick the two or three ideas or themes that seem most developed or interesting and explain briefly why. Unexpected Angles — highlight any ideas that were unusual or surprising that the group might otherwise overlook. Keep the tone energetic and open. No idea should be dismissed.`,
+};
+
 function generateRoomCode() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
@@ -76,13 +84,16 @@ function mergeNoteContent(typedContent, extractedContent) {
 
 // REST: create a new room
 app.post('/create-room', (req, res) => {
+  const { sessionType } = req.body ?? {};
+  const type = SESSION_PROMPTS[sessionType] ? sessionType : 'meeting';
+
   let code;
   do {
     code = generateRoomCode();
   } while (rooms[code]);
 
-  rooms[code] = { hostId: null, notes: [] };
-  res.json({ code });
+  rooms[code] = { hostId: null, notes: [], sessionType: type };
+  res.json({ code, sessionType: type });
 });
 
 // Socket.io events
@@ -105,8 +116,9 @@ io.on('connection', (socket) => {
     }
 
     console.log(`[socket] ${userName} joined room ${roomCode} (host: ${isHost})`);
-    // Send current notes to the newly joined client
+    // Send current notes and session type to the newly joined client
     socket.emit('notes-update', room.notes);
+    socket.emit('session-type', room.sessionType);
   });
 
   socket.on('add-note', async ({ roomCode, userName, content, imageData, imageMediaType }) => {
@@ -150,7 +162,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    console.log(`[socket] summarising room ${roomCode} (${room.notes.length} notes)`);
+    const prompt = SESSION_PROMPTS[room.sessionType] ?? SESSION_PROMPTS.meeting;
+    console.log(`[socket] summarising room ${roomCode} (${room.notes.length} notes, type: ${room.sessionType})`);
 
     try {
       const notesText = room.notes
@@ -159,12 +172,10 @@ io.on('connection', (socket) => {
 
       const message = await anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
+        max_tokens: 2048,
+        system: prompt,
         messages: [
-          {
-            role: 'user',
-            content: `You are summarising collaborative notes from a group session. Provide a clear, concise summary that captures the key points, themes, and any action items mentioned.\n\nNotes:\n${notesText}`,
-          },
+          { role: 'user', content: `Notes:\n${notesText}` },
         ],
       });
 
