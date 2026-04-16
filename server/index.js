@@ -24,6 +24,7 @@ const io = new Server(httpServer, {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],
   },
+  maxHttpBufferSize: 10e6,
 });
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -41,6 +42,36 @@ const rooms = {};
 
 function generateRoomCode() {
   return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+async function extractTextFromImage(imageData, imageMediaType) {
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1024,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: imageMediaType, data: imageData } },
+        { type: 'text', text: 'Extract all readable content from this image — slide text, bullet points, headings, whiteboard content, handwritten notes, on-screen text, code, and describe any charts or graphs in plain text. Output only the raw content as plain notes, with no commentary, no "the image shows" phrases, and no formatting preamble.' }
+      ]
+    }]
+  });
+  return message.content[0].text.trim();
+}
+
+function mergeNoteContent(typedContent, extractedContent) {
+  if (!typedContent) return extractedContent;
+  if (!extractedContent) return typedContent;
+  const seen = new Set();
+  return `${typedContent}\n${extractedContent}`
+    .split('\n')
+    .filter(line => {
+      const key = line.trim().toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join('\n');
 }
 
 // REST: create a new room
@@ -78,14 +109,30 @@ io.on('connection', (socket) => {
     socket.emit('notes-update', room.notes);
   });
 
-  socket.on('add-note', ({ roomCode, userName, content }) => {
+  socket.on('add-note', async ({ roomCode, userName, content, imageData, imageMediaType }) => {
     const room = rooms[roomCode];
     if (!room) return;
+
+    let finalContent = (content || '').trim();
+
+    if (imageData && imageMediaType) {
+      try {
+        const extracted = await extractTextFromImage(imageData, imageMediaType);
+        finalContent = mergeNoteContent(finalContent, extracted);
+        console.log(`[socket] vision extraction complete for room ${roomCode} by ${userName}`);
+      } catch (err) {
+        console.error('[socket] vision extraction error:', err.message);
+        socket.emit('error', 'Could not extract image content. Submitting typed text only.');
+        if (!finalContent) return;
+      }
+    }
+
+    if (!finalContent) return;
 
     const note = {
       id: Date.now() + Math.random(),
       userName,
-      content,
+      content: finalContent,
       timestamp: new Date().toISOString(),
     };
 

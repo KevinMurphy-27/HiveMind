@@ -140,9 +140,14 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
   const [connected, setConnected] = useState(false);
   const [codeCopied, setCodeCopied] = useState(false);
 
+  const [imageAttachment, setImageAttachment] = useState(null);
+  const [imageError, setImageError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
   const socketRef = useRef(null);
   const feedEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -159,6 +164,7 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
 
     socket.on('notes-update', (updatedNotes) => {
       setNotes(updatedNotes);
+      setSubmitting(false);
     });
 
     socket.on('summary-ready', (text) => {
@@ -169,6 +175,7 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
     socket.on('error', (msg) => {
       setSocketError(msg);
       setSummarising(false);
+      setSubmitting(false);
     });
 
     socket.on('disconnect', () => {
@@ -180,13 +187,58 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
     };
   }, [roomCode, userName, isHost]);
 
+  const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+  const MAX_SIZE = 5 * 1024 * 1024;
+
+  const handleImageSelect = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImageError('');
+    if (!ACCEPTED_TYPES.includes(file.type)) {
+      setImageError('Unsupported type. Use JPEG, PNG, GIF, or WebP.');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > MAX_SIZE) {
+      setImageError('Image exceeds 5 MB. Please choose a smaller file.');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      const [header, base64Data] = dataUrl.split(',');
+      if (!base64Data) { setImageError('Could not read file.'); return; }
+      const mediaType = header.replace('data:', '').replace(';base64', '');
+      setImageAttachment({ data: base64Data, mediaType, preview: dataUrl });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }, []);
+
+  const handleRemoveImage = useCallback(() => {
+    setImageAttachment(null);
+    setImageError('');
+  }, []);
+
   const handleAddNote = useCallback(() => {
     const content = noteText.trim();
-    if (!content || !socketRef.current) return;
-    socketRef.current.emit('add-note', { roomCode, userName, content });
+    if ((!content && !imageAttachment) || !socketRef.current) return;
+    setSubmitting(true);
+    socketRef.current.emit('add-note', {
+      roomCode,
+      userName,
+      content,
+      ...(imageAttachment && {
+        imageData: imageAttachment.data,
+        imageMediaType: imageAttachment.mediaType,
+      }),
+    });
     setNoteText('');
+    setImageAttachment(null);
+    setImageError('');
     textareaRef.current?.focus();
-  }, [noteText, roomCode, userName]);
+  }, [noteText, imageAttachment, roomCode, userName]);
 
   function handleSummarise() {
     if (!socketRef.current || summarising || notes.length === 0) return;
@@ -250,24 +302,55 @@ function RoomView({ roomCode, userName, isHost, onLeave }) {
           </div>
 
           <div className="add-note-bar">
-            <textarea
-              ref={textareaRef}
-              className="note-textarea"
-              placeholder="Type your note… (Ctrl+Enter to submit)"
-              value={noteText}
-              onChange={(e) => setNoteText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleAddNote();
-              }}
-              rows={3}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              style={{ display: 'none' }}
+              onChange={handleImageSelect}
             />
-            <button
-              className="btn btn-primary add-note-btn"
-              onClick={handleAddNote}
-              disabled={!noteText.trim()}
-            >
-              Add Note
-            </button>
+
+            {imageAttachment && (
+              <div className="image-preview-row">
+                <img src={imageAttachment.preview} alt="Attachment preview" className="image-preview-thumb" />
+                <button className="image-remove-btn" onClick={handleRemoveImage} title="Remove image" aria-label="Remove attached image">✕</button>
+              </div>
+            )}
+
+            {imageError && <p className="image-error">{imageError}</p>}
+
+            <div className="note-input-row">
+              <button
+                className="btn btn-secondary attach-btn"
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach image"
+                type="button"
+              >
+                📷
+              </button>
+              <textarea
+                ref={textareaRef}
+                className="note-textarea"
+                placeholder="Type your note… (Ctrl+Enter to submit)"
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleAddNote();
+                }}
+                rows={3}
+              />
+              <button
+                className="btn btn-primary add-note-btn"
+                onClick={handleAddNote}
+                disabled={submitting || (!noteText.trim() && !imageAttachment)}
+              >
+                {submitting ? (
+                  <><span className="spinner" /> Extracting…</>
+                ) : (
+                  <>Add Note<span className="btn-hint">Ctrl+↵</span></>
+                )}
+              </button>
+            </div>
           </div>
         </section>
 
