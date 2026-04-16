@@ -4,23 +4,36 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import { config } from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 const httpServer = createServer(app);
 
+const allowedOrigins = process.env.CLIENT_ORIGIN
+  ? [process.env.CLIENT_ORIGIN]
+  : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+
 const io = new Server(httpServer, {
   cors: {
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
   },
 });
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
+
+// Serve React frontend in production
+const clientDist = join(__dirname, '../client/dist');
+app.use(express.static(clientDist));
 
 // In-memory room storage
 // rooms[code] = { hostId: string|null, notes: Array<{ id, userName, content, timestamp }> }
@@ -120,6 +133,11 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`[socket] disconnected: ${socket.id}`);
   });
+});
+
+// Catch-all: serve React app for any non-API route
+app.get('*', (req, res) => {
+  res.sendFile(join(clientDist, 'index.html'));
 });
 
 const PORT = process.env.PORT || 3001;
