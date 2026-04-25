@@ -4,7 +4,6 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import { config } from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
-import { createClient } from '@supabase/supabase-js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -29,7 +28,6 @@ const io = new Server(httpServer, {
 });
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
@@ -38,8 +36,8 @@ app.use(express.json());
 const clientDist = join(__dirname, '../client/dist');
 app.use(express.static(clientDist));
 
-// In-memory room state — notes now live in Supabase; this tracks socket/host/interval info only
-// rooms[code] = { hostId, sessionType, clusterIntervalId, lastClusteredCount }
+// In-memory room storage
+// rooms[code] = { hostId: string|null, notes: Array<{ id, userName, content, timestamp }> }
 const rooms = {};
 
 const SESSION_PROMPTS = {
@@ -84,72 +82,8 @@ function mergeNoteContent(typedContent, extractedContent) {
     .join('\n');
 }
 
-// ── Clustering ────────────────────────────────────────────────────────────────
-
-async function clusterIdeas(ideas) {
-  const ideaList = ideas.map(i => `- ${i.content}`).join('\n');
-  const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
-    messages: [{
-      role: 'user',
-      content: `Group these brainstorm ideas into themed clusters.\nReturn ONLY a JSON array, no prose: [{"label":"short theme","ideas":["idea1","idea2"]},...]\n\nIdeas:\n${ideaList}`,
-    }],
-  });
-  const text = msg.content[0].text;
-  const match = text.match(/\[[\s\S]*\]/);
-  return match ? JSON.parse(match[0]) : [];
-}
-
-function startClusteringInterval(roomCode) {
-  if (!rooms[roomCode] || rooms[roomCode].clusterIntervalId) return;
-  rooms[roomCode].lastClusteredCount = 0;
-
-  rooms[roomCode].clusterIntervalId = setInterval(async () => {
-    const room = rooms[roomCode];
-    if (!room) return;
-
-    const { data: ideas, error } = await supabase
-      .from('ideas')
-      .select('content')
-      .eq('session_code', roomCode)
-      .order('created_at');
-
-    if (error) { console.error('[cluster] fetch error:', error.message); return; }
-    if (!ideas || ideas.length === 0) return;
-    if (ideas.length === room.lastClusteredCount) {
-      console.log(`[cluster] no new ideas in room ${roomCode} — skipping`);
-      return;
-    }
-
-    room.lastClusteredCount = ideas.length;
-    console.log(`[cluster] clustering ${ideas.length} ideas for room ${roomCode}`);
-
-    try {
-      const clusters = await clusterIdeas(ideas);
-      await supabase.from('clusters').upsert({
-        session_code: roomCode,
-        data: clusters,
-        updated_at: new Date().toISOString(),
-      });
-      console.log(`[cluster] upserted ${clusters.length} clusters for room ${roomCode}`);
-    } catch (err) {
-      console.error('[cluster] Claude error:', err.message);
-    }
-  }, 60_000);
-}
-
-function stopClusteringInterval(roomCode) {
-  const room = rooms[roomCode];
-  if (room?.clusterIntervalId) {
-    clearInterval(room.clusterIntervalId);
-    room.clusterIntervalId = null;
-  }
-}
-
-// ── REST: create a new room ───────────────────────────────────────────────────
-
-app.post('/create-room', async (req, res) => {
+// REST: create a new room
+app.post('/create-room', (req, res) => {
   const { sessionType } = req.body ?? {};
   const type = SESSION_PROMPTS[sessionType] ? sessionType : 'meeting';
 
@@ -158,24 +92,15 @@ app.post('/create-room', async (req, res) => {
     code = generateRoomCode();
   } while (rooms[code]);
 
-  rooms[code] = { hostId: null, sessionType: type, clusterIntervalId: null, lastClusteredCount: 0 };
-
-  // Persist session to Supabase
-  const { error } = await supabase.from('sessions').insert({ code, session_type: type });
-  if (error) console.error('[create-room] Supabase insert error:', error.message);
-
-  // Start auto-clustering for brainstorm sessions
-  if (type === 'brainstorm') startClusteringInterval(code);
-
+  rooms[code] = { hostId: null, notes: [], sessionType: type };
   res.json({ code, sessionType: type });
 });
 
-// ── Socket.io events ──────────────────────────────────────────────────────────
-
+// Socket.io events
 io.on('connection', (socket) => {
   console.log(`[socket] connected: ${socket.id}`);
 
-  socket.on('join-room', async ({ roomCode, userName, isHost }) => {
+  socket.on('join-room', ({ roomCode, userName, isHost }) => {
     const room = rooms[roomCode];
     if (!room) {
       socket.emit('error', 'Room not found');
@@ -186,16 +111,14 @@ io.on('connection', (socket) => {
     socket.data.roomCode = roomCode;
     socket.data.userName = userName;
 
-    if (isHost) room.hostId = socket.id;
+    if (isHost) {
+      room.hostId = socket.id;
+    }
 
     console.log(`[socket] ${userName} joined room ${roomCode} (host: ${isHost})`);
-
-    // Send session type — client loads ideas directly from Supabase
+    // Send current notes and session type to the newly joined client
+    socket.emit('notes-update', room.notes);
     socket.emit('session-type', room.sessionType);
-
-    // Record participant
-    const { error } = await supabase.from('participants').insert({ session_code: roomCode, user_name: userName });
-    if (error) console.error('[join-room] participant insert error:', error.message);
   });
 
   socket.on('add-note', async ({ roomCode, userName, content, imageData, imageMediaType }) => {
@@ -218,49 +141,42 @@ io.on('connection', (socket) => {
 
     if (!finalContent) return;
 
-    // Insert into Supabase — Realtime delivers it to all subscribed clients
-    const { error } = await supabase.from('ideas').insert({
-      session_code: roomCode,
-      user_name: userName,
+    const note = {
+      id: Date.now() + Math.random(),
+      userName,
       content: finalContent,
-    });
+      timestamp: new Date().toISOString(),
+    };
 
-    if (error) {
-      console.error('[add-note] Supabase insert error:', error.message);
-      socket.emit('error', 'Failed to save idea. Please try again.');
-      return;
-    }
-
-    console.log(`[socket] idea added in room ${roomCode} by ${userName}`);
+    room.notes.push(note);
+    io.to(roomCode).emit('notes-update', room.notes);
+    console.log(`[socket] note added in room ${roomCode} by ${userName}`);
   });
 
   socket.on('summarise', async ({ roomCode }) => {
     const room = rooms[roomCode];
     if (!room) return;
 
-    // Fetch ideas from Supabase
-    const { data: ideas, error } = await supabase
-      .from('ideas')
-      .select('user_name, content')
-      .eq('session_code', roomCode)
-      .order('created_at');
-
-    if (error || !ideas || ideas.length === 0) {
-      socket.emit('error', 'No ideas to summarise');
+    if (room.notes.length === 0) {
+      socket.emit('error', 'No notes to summarise');
       return;
     }
 
     const prompt = SESSION_PROMPTS[room.sessionType] ?? SESSION_PROMPTS.meeting;
-    console.log(`[socket] summarising room ${roomCode} (${ideas.length} ideas, type: ${room.sessionType})`);
+    console.log(`[socket] summarising room ${roomCode} (${room.notes.length} notes, type: ${room.sessionType})`);
 
     try {
-      const notesText = ideas.map(n => `${n.user_name}: ${n.content}`).join('\n');
+      const notesText = room.notes
+        .map((n) => `${n.userName}: ${n.content}`)
+        .join('\n');
 
       const message = await anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 2048,
         system: prompt,
-        messages: [{ role: 'user', content: `Notes:\n${notesText}` }],
+        messages: [
+          { role: 'user', content: `Notes:\n${notesText}` },
+        ],
       });
 
       const summary = message.content[0].text;
@@ -273,17 +189,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const { roomCode } = socket.data;
     console.log(`[socket] disconnected: ${socket.id}`);
-
-    if (roomCode && rooms[roomCode]) {
-      const roomSockets = io.sockets.adapter.rooms.get(roomCode);
-      if (!roomSockets || roomSockets.size === 0) {
-        stopClusteringInterval(roomCode);
-        delete rooms[roomCode];
-        console.log(`[socket] room ${roomCode} cleaned up`);
-      }
-    }
   });
 });
 

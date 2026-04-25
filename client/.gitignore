@@ -22,6 +22,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-# In your HiveMind directory
-echo "node_modules/" > .gitignore
-echo ".env" >> .gitignore
+.env
